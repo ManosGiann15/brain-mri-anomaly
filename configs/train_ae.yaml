@@ -1,0 +1,22 @@
+defaults: []
+seed: 42
+paths: configs/paths.yaml
+
+# I/O
+patch_size: [96, 96, 96]
+spacing: [1.0, 1.0, 1.0]
+intensity_zscore: true
+
+# Model
+channels: [32, 64, 128, 256]
+latent_dim: 256
+use_skip: true
+
+# Training
+epochs: 10
+batch_size: 2
+lr: 1e-4
+amp: true
+
+# Eval
+threshold_percentile: 98.5

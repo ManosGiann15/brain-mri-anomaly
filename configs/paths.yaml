@@ -1,0 +1,6 @@
+data_root: "data"
+train_healthy_dir: "${data_root}/ixi_healthy_t1"
+val_healthy_dir:   "${data_root}/oasis_healthy_t1"
+test_tumor_dir:    "${data_root}/brats_t1"
+weights_dir: "weights"
+runs_dir: "runs"

@@ -14,15 +14,3 @@ datasets:
     archive: brain-mri-images-for-brain-tumor-detection.zip
     extract: true
 
-  - name: ixi_sample
-    type: gdrive
-    dest: data/ixi
-    archive: ixi_sample.zip
-    extract: true
-
-  - name: custom_from_url
-    type: url
-    url: https://example.com/some_dataset.zip
-    dest: data/custom_from_url
-    archive: some_dataset.zip
-    extract: true

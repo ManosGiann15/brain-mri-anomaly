@@ -1,0 +1,8 @@
+# Configuration for datasets used by the project. Edit this file to add/remove datasets.
+datasets:
+  brats20:
+    provider: kaggle
+    source: awsaf49/brats20-dataset-training-validation
+    destination: data/brats20
+    archive: data/_archives/brats20.zip
+    unzip: true

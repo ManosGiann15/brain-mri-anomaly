@@ -14,7 +14,8 @@ switch ($Task) {
   "train"   { python -m brain_mri_anomaly.train_ae --config configs/train_ae.yaml }
   "eval"    { python -m brain_mri_anomaly.eval_ae --config configs/train_ae.yaml }
   "app"     { python -m brain_mri_anomaly.app_gradio }
+  "data"    { python scripts/download_datasets.py --config configs/datasets.yaml }
   default   {
-    Write-Host "Usage: .\make.ps1 <install|lint|fmt|test|train|eval|app>"
+    Write-Host "Usage: .\make.ps1 <install|lint|fmt|test|train|eval|app|data>"
   }
 }

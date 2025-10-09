@@ -1,11 +1,13 @@
 from pathlib import Path
-import numpy as np
+
 import nibabel as nib
+import numpy as np
 import tqdm
 
 # ------------------------------------------------------------------------------
 # 1. Load volume safely (float32, minimal memory)
 # ------------------------------------------------------------------------------
+
 
 def load_volume(path: Path) -> np.ndarray:
     """
@@ -20,6 +22,7 @@ def load_volume(path: Path) -> np.ndarray:
 # 2. Mask creation
 # ------------------------------------------------------------------------------
 
+
 def create_brain_mask(volume: np.ndarray) -> np.ndarray:
     """
     Generate a binary brain mask where non-zero voxels correspond to tissue.
@@ -31,6 +34,7 @@ def create_brain_mask(volume: np.ndarray) -> np.ndarray:
 # ------------------------------------------------------------------------------
 # 3. Safe mean/std computation to avoid TB allocations
 # ------------------------------------------------------------------------------
+
 
 def safe_mean_std(volume: np.ndarray, mask: np.ndarray) -> tuple[float, float]:
     """
@@ -62,7 +66,10 @@ def safe_mean_std(volume: np.ndarray, mask: np.ndarray) -> tuple[float, float]:
 # 4. Volume normalization (z-score or min-max)
 # ------------------------------------------------------------------------------
 
-def normalize_volume(volume: np.ndarray, mask: np.ndarray, method: str = "zscore") -> np.ndarray:
+
+def normalize_volume(
+    volume: np.ndarray, mask: np.ndarray, method: str = "zscore"
+) -> np.ndarray:
     """
     Normalize intensity values within the brain region.
     Avoids huge temporary arrays by using slice-wise computation.
@@ -87,7 +94,10 @@ def normalize_volume(volume: np.ndarray, mask: np.ndarray, method: str = "zscore
 # 5. Slice extraction
 # ------------------------------------------------------------------------------
 
-def extract_slices(volume: np.ndarray, mask: np.ndarray, axis: int = 2) -> list[np.ndarray]:
+
+def extract_slices(
+    volume: np.ndarray, mask: np.ndarray, axis: int = 2
+) -> list[np.ndarray]:
     """
     Extract 2D slices along the chosen axis, discarding empty ones.
     """
@@ -112,7 +122,10 @@ def extract_slices(volume: np.ndarray, mask: np.ndarray, axis: int = 2) -> list[
 # 6. Full preprocessing pipeline
 # ------------------------------------------------------------------------------
 
-def preprocess_patient(patient_dir: Path, modalities: list[str], save_dir: Path, force: bool = False) -> None:
+
+def preprocess_patient(
+    patient_dir: Path, modalities: list[str], save_dir: Path, force: bool = False
+) -> None:
     """
     Full preprocessing for one patient:
       load → mask → normalize → slice → save.
@@ -134,7 +147,9 @@ def preprocess_patient(patient_dir: Path, modalities: list[str], save_dir: Path,
 
         # --- Skip if already processed ---
         if not force and done_marker.exists():
-            print(f"[SKIP] {patient_id}/{mod} already processed (found {done_marker.name})")
+            print(
+                f"[SKIP] {patient_id}/{mod} already processed (found {done_marker.name})"
+            )
             continue
 
         # Ensure output dir exists
@@ -163,16 +178,35 @@ def preprocess_patient(patient_dir: Path, modalities: list[str], save_dir: Path,
         # Free memory
         del volume, norm_volume, mask, slices
 
-        print(f"[OK] {patient_id}/{mod}: saved {saved} new slices" + ("" if saved else " (all existed)"))
+        print(
+            f"[OK] {patient_id}/{mod}: saved {saved} new slices"
+            + ("" if saved else " (all existed)")
+        )
 
 
 if __name__ == "__main__":
-    RAW_DIR = Path("../../data/brats20/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData")
-    PROCESSED_DIR = Path("../../data/processed")
+    RAW_DIR_TRAIN = Path(
+        "../../data/brats20/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData"
+    )
+    PROCESSED_DIR_TRAIN = Path("../../data/processed/Train")
+
+    RAW_DIR_VAL = Path(
+        "../../data/brats20/BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData"
+    )
+    PROCESSED_DIR_VAL = Path("../../data/processed/Validation")
+
     MODALITIES = ["t1", "t1ce", "t2", "flair"]
 
     FORCE = False  # set True to reprocess even if .done exists
 
-    patient_folders = [p for p in RAW_DIR.iterdir() if p.is_dir()]
-    for patient_folder in tqdm.tqdm(patient_folders, desc="Processing patients", total=len(patient_folders)):
-        preprocess_patient(patient_folder, MODALITIES, PROCESSED_DIR, force=FORCE)
+    patient_folders = [p for p in RAW_DIR_TRAIN.iterdir() if p.is_dir()]
+    for patient_folder in tqdm.tqdm(
+        patient_folders, desc="Processing patients", total=len(patient_folders)
+    ):
+        preprocess_patient(patient_folder, MODALITIES, PROCESSED_DIR_TRAIN, force=FORCE)
+
+    patient_folders = [p for p in RAW_DIR_VAL.iterdir() if p.is_dir()]
+    for patient_folder in tqdm.tqdm(
+        patient_folders, desc="Processing patients", total=len(patient_folders)
+    ):
+        preprocess_patient(patient_folder, MODALITIES, PROCESSED_DIR_VAL, force=FORCE)

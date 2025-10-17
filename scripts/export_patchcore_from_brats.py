@@ -1,61 +1,78 @@
 #!/usr/bin/env python3
 """
-Export BraTS-style per-subject folders to PatchCore/anomalib Folder dataset.
+Export BraTS-style per-subject folders to two outputs:
 
-Input layout (your screenshot):
+1) Per-modality PNGs:
+   out_modalities/
+     train/{t1,t2,t1ce,flair}/*.png
+     val/{t1,t2,t1ce,flair}/*.png
+
+2) Fusion PNGs (RGB of 3 modalities):
+   out_fusion/
+     train/*.png
+     val/*.png
+
+Input layout (example):
 brats20/
-  Train/
+  Train/python scripts/export_patchcore_from_brats.py \python scripts/export_patchcore_from_brats.py \
+  --src-train brats20/Train \
+  --src-val brats20/Val \
+  --out-modalities patchcore_modalities \
+  --out-fusion patchcore_fusion \
+  --fusion t1ce,t2,flair \
+  --export-modalities flair t1 t1ce t2 \
+  --image-size 256 256
+  --src-train brats20/Train \
+  --src-val brats20/Val \
+  --out-modalities patchcore_modalities \
+  --out-fusion patchcore_fusion \
+  --fusion t1ce,t2,flair \
+  --export-modalities flair t1 t1ce t2 \
+  --image-size 256 256
     BraTS20_Training_001/
-      BraTS20_Training_001_flair.nii.gz
+      BraTS20_Training_001_flair.nii.gzpython scripts/export_patchcore_from_brats.py \
+  --src-train brats20/Train \
+  --src-val brats20/Val \
+  --out-modalities patchcore_modalities \
+  --out-fusion patchcore_fusion \
+  --fusion t1ce,t2,flair \
+  --export-modalities flair t1 t1ce t2 \
+  --image-size 256 256. ;/.
       BraTS20_Training_001_t1.nii.gz
       BraTS20_Training_001_t1ce.nii.gz
       BraTS20_Training_001_t2.nii.gz
-      # (or .nii or .npy per modality)
     BraTS20_Training_002/
     ...
-
-Output (anomalib Folder):
-patchcore/
-  train/
-    normal/            *_FUSION.png  (if --fusion used)
-    normal/flair/      *_flair.png
-    normal/t1/         *_t1.png
-    normal/t1ce/       *_t1ce.png
-    normal/t2/         *_t2.png
-  val/
-    anomalous/ ...
-  test/
-    anomalous/ ...
+  Val/
+    BraTS20_Validation_001/   # Name doesn't matter; script uses directory name
 
 Usage:
 ------
 python scripts/export_patchcore_from_brats.py \
   --src-train brats20/Train \
-  --out-root patchcore \
+  --src-val brats20/Val \
+  --out-modalities patchcore_modalities \
+  --out-fusion patchcore_fusion \
   --fusion t1ce,t2,flair \
   --export-modalities flair t1 t1ce t2 \
-  --image-size 256 256 \
-  --splits-csv config/splits.csv
+  --image-size 256 256
 """
 from __future__ import annotations
 
 import argparse
-import csv
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
+# Optional NIfTI support
 try:
     import nibabel as nib  # for .nii/.nii.gz
-
     _HAS_NIB = True
 except Exception:
     _HAS_NIB = False
-
-from tqdm import tqdm
 
 
 # ----------------------------
@@ -80,7 +97,6 @@ def load_modality(path: Path) -> np.ndarray:
             )
         img = nib.load(str(path))
         arr = img.get_fdata(dtype=np.float32)
-        # Ensure (H, W, S)
         if arr.ndim == 3:
             return arr
         elif arr.ndim == 2:
@@ -129,41 +145,8 @@ def resize_uint8(img: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
 
 
 def save_rgb(img3: np.ndarray, out_path: Path) -> None:
+    ensure_dir(out_path.parent)
     Image.fromarray(img3, mode="RGB").save(out_path)
-
-
-# ----------------------------
-# Splits
-# ----------------------------
-@dataclass
-class SubjectMeta:
-    split: str  # train | val | test
-    label: str  # normal | anomalous
-
-
-def load_splits_csv(csv_path: Optional[Path]) -> Dict[str, SubjectMeta]:
-    """
-    CSV columns: subject,split,label
-    Example:
-        BraTS20_Training_001,train,normal
-        BraTS20_Training_002,val,anomalous
-    If missing, default: train/normal.
-    """
-    mapping: Dict[str, SubjectMeta] = {}
-    if csv_path is None or not csv_path.exists():
-        return mapping
-    with open(csv_path, "r", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            subj = row["subject"].strip()
-            split = row["split"].strip().lower()
-            label = row["label"].strip().lower()
-            if split not in {"train", "val", "test"}:
-                raise ValueError(f"Invalid split for {subj}: {split}")
-            if label not in {"normal", "anomalous"}:
-                raise ValueError(f"Invalid label for {subj}: {label}")
-            mapping[subj] = SubjectMeta(split=split, label=label)
-    return mapping
 
 
 # ----------------------------
@@ -172,39 +155,47 @@ def load_splits_csv(csv_path: Optional[Path]) -> Dict[str, SubjectMeta]:
 MOD_ALIASES = {
     "flair": ("flair",),
     "t1": ("t1",),
-    "t1ce": ("t1ce", "t1ce"),  # keep as is (alias slot for safety)
+    "t1ce": ("t1ce", "t1ce"),
     "t2": ("t2",),
 }
 
-NIFTI_SUFFIXES = (".nii", ".nii.gz", ".npy")
+NIFTI_SUFFIXES = (".nii", ".npy")  # handle .nii and .npy; accept .nii.gz via suffixes logic
 
 
 def find_modality_file(subj_dir: Path, subj_name: str, modality: str) -> Optional[Path]:
     """
     Find file inside subject folder that matches the modality.
     Tries:
-      {subj_name}_{modality} with .nii/.nii.gz/.npy
-      '*{modality}*.nii*' as fallback
+      {subj_name}_{modality}.nii / .nii.gz / .npy
+      '*{modality}*' as fallback
     """
-    # exact pattern first
-    for suf in NIFTI_SUFFIXES:
-        cand = subj_dir / f"{subj_name}_{modality}{suf}"
+    # exact pattern first (.nii and .npy)
+    cand_nii = subj_dir / f"{subj_name}_{modality}.nii"
+    cand_npy = subj_dir / f"{subj_name}_{modality}.npy"
+    cand_niigz = subj_dir / f"{subj_name}_{modality}.nii.gz"
+    for cand in (cand_niigz, cand_nii, cand_npy):
         if cand.exists():
             return cand
 
     # fallback: any file containing modality token
     tokens = MOD_ALIASES.get(modality, (modality,))
     for tok in tokens:
-        hits = sorted(subj_dir.glob(f"*{tok}*"))
-        for h in hits:
-            if h.suffix in NIFTI_SUFFIXES or "".join(h.suffixes) in [".nii.gz"]:
+        for h in sorted(subj_dir.glob(f"*{tok}*")):
+            # accept .npy, .nii, .nii.gz
+            if h.suffix == ".npy":
+                return h
+            if h.suffix == ".nii":
+                return h
+            if "".join(h.suffixes).endswith(".nii.gz"):
                 return h
     return None
 
 
-def list_subjects(src_train: Path) -> List[Path]:
-    """Return subject directories under src_train (BraTS20_Training_XXX)."""
-    return sorted([p for p in src_train.iterdir() if p.is_dir()])
+def list_subjects(src_split_dir: Path) -> List[Path]:
+    """Return subject directories under src_split_dir."""
+    if not src_split_dir.exists():
+        return []
+    return sorted([p for p in src_split_dir.iterdir() if p.is_dir()])
 
 
 def subject_name_from_dir(d: Path) -> str:
@@ -215,21 +206,12 @@ def subject_name_from_dir(d: Path) -> str:
 # ----------------------------
 # Export logic
 # ----------------------------
-def make_out_dir(
-    out_root: Path, split: str, label: str, subfolder: Optional[str] = None
-) -> Path:
-    base = out_root / split / label
-    if subfolder:
-        base = base / subfolder
-    ensure_dir(base)
-    return base
-
-
 def export_subject(
     subj_dir: Path,
     subj_name: str,
-    out_root: Path,
-    meta: SubjectMeta,
+    out_modalities_root: Optional[Path],
+    out_fusion_root: Optional[Path],
+    split: str,  # "train" | "val"
     image_size: Tuple[int, int],
     export_modalities: List[str],
     fusion_triplet: Optional[Tuple[str, str, str]],
@@ -239,11 +221,11 @@ def export_subject(
     Load requested modalities for a subject and export slices.
     Returns number of images written.
     """
-    # Load volumes for required modalities
     required = set(export_modalities)
     if fusion_triplet:
         required.update(fusion_triplet)
 
+    # Load volumes
     volumes: Dict[str, np.ndarray] = {}
     for m in required:
         f = find_modality_file(subj_dir, subj_name, m)
@@ -254,7 +236,7 @@ def export_subject(
         vol = load_modality(f)
         volumes[m] = vol
 
-    # Determine number of slices available in common
+    # Slices in common
     def ns(a: np.ndarray) -> int:
         return a.shape[2] if is_3d(a) else 1
 
@@ -264,7 +246,6 @@ def export_subject(
     for s in range(max_slices):
         # normalize each modality slice to [0,1], skip empty
         norm_slices: Dict[str, Optional[np.ndarray]] = {}
-        empty_any = False
         for m, vol in volumes.items():
             sl = vol[:, :, s] if is_3d(vol) else vol
             if is_empty_slice(sl, thresh=empty_thresh):
@@ -272,8 +253,8 @@ def export_subject(
                 continue
             norm_slices[m] = robust_clip_and_norm(sl)
 
-        # Fusion export
-        if fusion_triplet:
+        # Fusion export (RGB)
+        if out_fusion_root is not None and fusion_triplet:
             r, g, b = fusion_triplet
             if (
                 norm_slices.get(r) is not None
@@ -285,25 +266,57 @@ def export_subject(
                 B = to_uint8(norm_slices[b])
                 rgb = np.dstack([R, G, B])
                 rgb = resize_uint8(rgb, image_size)
-                odir = make_out_dir(out_root, meta.split, meta.label)
-                oname = f"{subj_name}_s{str(s).zfill(3)}_FUSION.png"
-                save_rgb(rgb, odir / oname)
+                out_file = out_fusion_root / split / f"{subj_name}_s{str(s).zfill(3)}_FUSION.png"
+                save_rgb(rgb, out_file)
                 written += 1
 
         # Per-modality export (as 3-channel grayscale)
-        for m in export_modalities:
-            sl01 = norm_slices.get(m)
-            if sl01 is None:
-                continue
-            g = to_uint8(sl01)
-            g = resize_uint8(g, image_size)
-            rgb = np.dstack([g, g, g])
-            odir = make_out_dir(out_root, meta.split, meta.label, subfolder=m)
-            oname = f"{subj_name}_s{str(s).zfill(3)}_{m}.png"
-            save_rgb(rgb, odir / oname)
-            written += 1
+        if out_modalities_root is not None:
+            for m in export_modalities:
+                sl01 = norm_slices.get(m)
+                if sl01 is None:
+                    continue
+                g = to_uint8(sl01)
+                g = resize_uint8(g, image_size)
+                rgb = np.dstack([g, g, g])
+                out_file = out_modalities_root / split / m / f"{subj_name}_s{str(s).zfill(3)}_{m}.png"
+                save_rgb(rgb, out_file)
+                written += 1
 
     return written
+
+
+def export_split(
+    split_name: str,
+    src_dir: Path,
+    out_modalities_root: Optional[Path],
+    out_fusion_root: Optional[Path],
+    image_size: Tuple[int, int],
+    export_modalities: List[str],
+    fusion_triplet: Optional[Tuple[str, str, str]],
+    empty_thresh: float,
+) -> int:
+    """Process one split directory (Train or Val)."""
+    subj_dirs = list_subjects(src_dir)
+    if not subj_dirs:
+        print(f"[WARN] No subject folders found under {src_dir} (split={split_name})")
+        return 0
+
+    total = 0
+    for d in tqdm(subj_dirs, desc=f"Exporting {split_name} subjects"):
+        subj = subject_name_from_dir(d)
+        total += export_subject(
+            subj_dir=d,
+            subj_name=subj,
+            out_modalities_root=out_modalities_root,
+            out_fusion_root=out_fusion_root,
+            split=split_name,
+            image_size=image_size,
+            export_modalities=export_modalities,
+            fusion_triplet=fusion_triplet,
+            empty_thresh=empty_thresh,
+        )
+    return total
 
 
 # ----------------------------
@@ -311,7 +324,7 @@ def export_subject(
 # ----------------------------
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Export BraTS-style per-subject folders to PatchCore/anomalib Folder."
+        description="Export BraTS-style per-subject folders to per-modality and fusion PNG datasets."
     )
     p.add_argument(
         "--src-train",
@@ -320,16 +333,22 @@ def parse_args() -> argparse.Namespace:
         help="Path to the 'Train' folder (e.g., brats20/Train).",
     )
     p.add_argument(
-        "--out-root",
+        "--src-val",
         type=Path,
         required=True,
-        help="Output root for PatchCore Folder layout (e.g., patchcore).",
+        help="Path to the 'Val' folder (e.g., brats20/Val).",
     )
     p.add_argument(
-        "--splits-csv",
+        "--out-modalities",
         type=Path,
-        default=None,
-        help="Optional CSV with columns: subject,split,label.",
+        required=True,
+        help="Output root for per-modality PNGs.",
+    )
+    p.add_argument(
+        "--out-fusion",
+        type=Path,
+        required=True,
+        help="Output root for fusion PNGs.",
     )
     p.add_argument(
         "--image-size",
@@ -349,7 +368,7 @@ def parse_args() -> argparse.Namespace:
         "--fusion",
         type=str,
         default=None,
-        help="3-modality fusion triplet, e.g., 't1ce,t2,flair' (R,G,B).",
+        help="3-modality fusion triplet, e.g., 't1ce,t2,flair' (R,G,B). Required for fusion output.",
     )
     p.add_argument(
         "--empty-thresh",
@@ -363,53 +382,57 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
 
-    src_train: Path = args.src_train
-    out_root: Path = args.out_root
-    ensure_dir(out_root)
+    # Prepare outputs
+    out_modalities_root = args.out_modalities
+    out_fusion_root = args.out_fusion
+    ensure_dir(out_modalities_root)
+    ensure_dir(out_fusion_root)
 
-    # Fusion parsing
+    # Parse fusion
     fusion_triplet: Optional[Tuple[str, str, str]] = None
     if args.fusion:
         parts = [x.strip().lower() for x in args.fusion.split(",")]
         if len(parts) != 3:
-            raise ValueError(
-                "--fusion expects exactly 3 modalities, e.g. 't1ce,t2,flair'"
-            )
+            raise ValueError("--fusion expects exactly 3 modalities, e.g. 't1ce,t2,flair'")
         for p in parts:
             if p not in {"flair", "t1", "t1ce", "t2"}:
                 raise ValueError(f"Unknown modality in fusion: {p}")
         fusion_triplet = (parts[0], parts[1], parts[2])
-        print(
-            f"[INFO] Fusion RGB = (R={fusion_triplet[0]}, G={fusion_triplet[1]}, B={fusion_triplet[2]})"
-        )
+        print(f"[INFO] Fusion RGB = (R={fusion_triplet[0]}, G={fusion_triplet[1]}, B={fusion_triplet[2]})")
+    else:
+        print("[INFO] No fusion specified; fusion dataset will be empty unless --fusion is provided.")
 
-    # Discover subjects
-    subj_dirs = list_subjects(src_train)
-    if not subj_dirs:
-        raise RuntimeError(f"No subject folders found under {src_train}")
+    # Normalize modality list
+    export_modalities = [m for m in args.export_modalities if m in {"flair", "t1", "t1ce", "t2"}]
+    if not export_modalities and fusion_triplet is None:
+        raise ValueError("Nothing to export. Provide --export-modalities and/or --fusion.")
 
-    # Load splits map
-    split_map = load_splits_csv(args.splits_csv)
-    default_meta = SubjectMeta(split="train", label="normal")
+    # Export both splits
+    total_train = export_split(
+        split_name="train",
+        src_dir=args.src_train,
+        out_modalities_root=out_modalities_root,
+        out_fusion_root=out_fusion_root,
+        image_size=(args.image_size[0], args.image_size[1]),
+        export_modalities=export_modalities,
+        fusion_triplet=fusion_triplet,
+        empty_thresh=args.empty_thresh,
+    )
 
-    total = 0
-    for d in tqdm(subj_dirs, desc="Exporting subjects"):
-        subj = subject_name_from_dir(d)
-        meta = split_map.get(subj, default_meta)
-        total += export_subject(
-            subj_dir=d,
-            subj_name=subj,
-            out_root=out_root,
-            meta=meta,
-            image_size=(args.image_size[0], args.image_size[1]),
-            export_modalities=[
-                m for m in args.export_modalities if m in {"flair", "t1", "t1ce", "t2"}
-            ],
-            fusion_triplet=fusion_triplet,
-            empty_thresh=args.empty_thresh,
-        )
+    total_val = export_split(
+        split_name="val",
+        src_dir=args.src_val,
+        out_modalities_root=out_modalities_root,
+        out_fusion_root=out_fusion_root,
+        image_size=(args.image_size[0], args.image_size[1]),
+        export_modalities=export_modalities,
+        fusion_triplet=fusion_triplet,
+        empty_thresh=args.empty_thresh,
+    )
 
-    print(f"[DONE] Wrote {total} images to {out_root}")
+    print(f"[DONE] Wrote {total_train + total_val} images total.")
+    print(f"  Per-modality root: {out_modalities_root}")
+    print(f"  Fusion root:       {out_fusion_root}")
 
 
 if __name__ == "__main__":
